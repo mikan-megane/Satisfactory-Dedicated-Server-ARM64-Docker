@@ -1,1 +1,6 @@
-sudo docker --debug build --no-cache -t satisfactory-arm64 .
+#!/bin/bash
+set -euo pipefail
+cd "$(dirname "$0")"
+
+# Full rebuild without any Docker layer cache.
+exec docker compose build --no-cache "$@"

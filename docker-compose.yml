@@ -1,19 +1,62 @@
 services:
   satisfactory-server:
-    image: 'satisfactory-arm64'
-    container_name: 'satisfactory-server'
+    build:
+      context: .
+      args:
+        # auto | armv8.0 | armv8.2 | armv8.4
+        # auto = pick the best FEX build for the machine running the build.
+        FEX_ARCH: ${FEX_ARCH:-auto}
+    image: satisfactory-arm64:latest
+    container_name: satisfactory-server
+    restart: unless-stopped
+
+    # The dedicated server needs all three ports since Update 1.1:
+    #   7777/tcp - HTTPS API + game traffic
+    #   7777/udp - game traffic + lightweight query
+    #   8888/tcp - reliable messaging (added in 1.1)
+    # Keep host and container ports identical; the server advertises its
+    # internal ports to clients, so asymmetric NAT mappings break joining.
     ports:
-      - '7777:7777/udp'
-      - '7777:7777/tcp'
-      - '8888:8888/tcp'
-    restart: 'unless-stopped'
+      - "${SERVER_GAME_PORT:-7777}:${SERVER_GAME_PORT:-7777}/tcp"
+      - "${SERVER_GAME_PORT:-7777}:${SERVER_GAME_PORT:-7777}/udp"
+      - "${SERVER_MESSAGING_PORT:-8888}:${SERVER_MESSAGING_PORT:-8888}/tcp"
+
     environment:
-      - EXTRA_PARAMS=-log -unattended -ini:Engine:[HTTPServer.Listeners]:DefaultBindAddress=any
-      - ALWAYS_UPDATE_ON_START=true
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      GAME_PORT: ${SERVER_GAME_PORT:-7777}
+      MESSAGING_PORT: ${SERVER_MESSAGING_PORT:-8888}
+      ALWAYS_UPDATE_ON_START: ${ALWAYS_UPDATE_ON_START:-true}
+      EXPERIMENTAL_BRANCH: ${EXPERIMENTAL_BRANCH:-false}
+      EXTRA_PARAMS: ${EXTRA_PARAMS:-}
+
     volumes:
-      - './satisfactory:/satisfactory'
-      - './config:/home/steam/.config/Epic'
-      - ./init-server.sh:/home/steam/init-server.sh:rw
+      # Game installation (SteamCMD app 1690800), logs and generated INI files.
+      - ./satisfactory:/satisfactory
+      # Saves, ServerSettings and the HTTPS API certificate.
+      - ./config:/home/steam/.config/Epic
+      # FEX rootfs + code cache. Keep this volume so restarts are fast and the
+      # ~500 MB rootfs is only downloaded once.
+      - ./fex-data:/home/steam/.fex
+
+    healthcheck:
+      test: ["CMD", "/home/steam/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # First start downloads the rootfs and ~3 GB of game files and may load
+      # the map slowly under emulation.
+      start_period: 15m
+
+    # Give the server time to save and shut down cleanly.
+    stop_grace_period: 120s
+
+    # Allows 'docker attach satisfactory-server' for the UE server console.
     stdin_open: true
     tty: true
-    entrypoint: /home/steam/init-server.sh
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
